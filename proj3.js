@@ -87,6 +87,13 @@ async function main() {
     const tank = await load_gltf("/resource/tank.glb",device, preferredFormat);
     console.log(tank)
 
+    //grid 로드
+    const grid = load_grid(device,preferredFormat)
+
+    //world axis 로드
+    const worldAxis = load_worldAxis(device,preferredFormat)
+    console.log(worldAxis)
+
     //텍스처 생성
     const depthTexture = device.createTexture({ //텍스처의 깊이 설정
         size: [canvasTexture.width, canvasTexture.height],
@@ -121,6 +128,8 @@ async function main() {
 
         MVP = mat4.multiply(UI.matrices.VP, M); // M : 모델 행렬 , V : View(카메라), P : Projection(3D -> 2D)
         tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
+        grid.render(renderPass, MVP)
+        worldAxis.render(renderPass,MVP)
         renderPass.end();
         const commandBuffer = encoder.finish();
         device.queue.submit([commandBuffer]);
@@ -130,6 +139,211 @@ async function main() {
 
     requestAnimationFrame(render);
 
+}
+
+function load_grid(device, preferredFormat) {
+    const gridSize = 10; // 그리드 크기 (±gridSize)
+    const gridSpacing = 1; // 그리드 간격
+    const gridVertices = [];
+
+    // 그리드의 X 축 방향 선 생성
+    for (let z = -gridSize; z <= gridSize; z++) {
+        gridVertices.push(-gridSize, -0.5, z * gridSpacing); // 시작점
+        gridVertices.push(gridSize, -0.5, z * gridSpacing);  // 끝점
+    }
+
+    // 그리드의 Z 축 방향 선 생성
+    for (let x = -gridSize; x <= gridSize; x++) {
+        gridVertices.push(x * gridSpacing, -0.5, -gridSize); // 시작점
+        gridVertices.push(x * gridSpacing, -0.5, gridSize);  // 끝점
+    }
+
+    const gridBuffer = device.createBuffer({
+        label: "grid vertices",
+        size: gridVertices.length * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.VERTEX,
+        mappedAtCreation: true,
+    });
+
+    new Float32Array(gridBuffer.getMappedRange()).set(gridVertices);
+    gridBuffer.unmap();
+
+    const module = device.createShaderModule({
+        code: `
+            struct Uniforms {
+                MVP: mat4x4<f32>,
+            };
+
+            @binding(0) @group(0) var<uniform> uniforms: Uniforms;
+
+            @vertex
+            fn vs_main(@location(0) position: vec3f) -> @builtin(position) vec4f {
+                // MVP 행렬로 정점을 변환
+                return uniforms.MVP * vec4f(position, 1.0);
+            }
+
+            @fragment
+            fn fs_main() -> @location(0) vec4f {
+                return vec4f(0.6, 0.6, 0.6, 1.0); // Grid 색상
+            }`
+            ,
+    });
+
+    const uniformBuffer = device.createBuffer({
+        size: 4*4*4,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const pipeline = device.createRenderPipeline({
+        label: "grid pipeline",
+        layout: "auto",
+        vertex: {
+            module,
+            entryPoint: "vs_main",
+            buffers: [
+                {
+                    arrayStride: 3 * Float32Array.BYTES_PER_ELEMENT,
+                    attributes: [
+                        {
+                            shaderLocation: 0,
+                            offset: 0,
+                            format: "float32x3",
+                        },
+                    ],
+                },
+            ],
+        },
+        fragment: {
+            module,
+            entryPoint: "fs_main",
+            targets: [{ format: preferredFormat }],
+        },
+        primitive: {
+            topology: "line-list", // 각 두 점이 하나의 선분으로 처리됨
+        },
+        depthStencil: {
+            format: "depth24plus",
+            depthWriteEnabled: true,
+            depthCompare: "less",
+        },
+    });
+
+    const bindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(id_group),
+        entries:[
+            { binding: 0, resource: {buffer: uniformBuffer} },
+        ],
+    });
+
+    function render(renderPass,MVP) {
+        renderPass.setPipeline(pipeline);
+        renderPass.setBindGroup(0,bindGroup);
+        renderPass.setVertexBuffer(0, gridBuffer);
+        device.queue.writeBuffer(uniformBuffer, 0, MVP);
+        renderPass.draw(gridVertices.length / 3); // 총 정점 개수의 1/3만큼 그리기
+    }
+
+    return { render };
+}
+
+function load_worldAxis(device, preferredFormat) {
+    // 월드 축의 길이를 설정
+    const axisLength = 5;
+    const axisVertices = [
+        // X축 (빨간색)
+        0, 0, 0, axisLength, 0, 0,
+        // Y축 (초록색)
+        0, 0, 0, 0, axisLength, 0,
+        // Z축 (파란색)
+        0, 0, 0, 0, 0, axisLength
+    ];
+
+    const axisBuffer = device.createBuffer({
+        label: "axis vertices",
+        size: axisVertices.length * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.VERTEX,
+        mappedAtCreation: true,
+    });
+
+    new Float32Array(axisBuffer.getMappedRange()).set(axisVertices);
+    axisBuffer.unmap();
+
+    const module = device.createShaderModule({
+        code: `
+            @group(0) @binding(0) var<uniform> MVP: mat4x4<f32>;
+
+            @vertex
+            fn vs_main(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
+                // 고정 크기 배열을 사용하여 위치 지정
+                var positions: array<vec3f, 6>;
+
+                positions[0] = vec3f(0.0, 0.0, 0.0);  // X축 시작점
+                positions[1] = vec3f(1.0, 0.0, 0.0);  // X축 끝점
+
+                positions[2] = vec3f(0.0, 0.0, 0.0);  // Y축 시작점
+                positions[3] = vec3f(0.0, 1.0, 0.0);  // Y축 끝점
+
+                positions[4] = vec3f(0.0, 0.0, 0.0);  // Z축 시작점
+                positions[5] = vec3f(0.0, 0.0, 1.0);  // Z축 끝점
+
+                // MVP 행렬을 사용하여 변환된 위치 반환
+                let transformedPosition = MVP * vec4f(positions[vertexIndex], 1.0);
+                
+                // 변환된 위치를 반환하여 위치 정보를 GPU에 전달
+                return transformedPosition;
+            }
+
+            @fragment
+            fn fs_main() -> @location(0) vec4f {
+                return vec4f(1.0,0.0,0.0,1.0); // Grid 색상
+            }
+        `,
+    });
+
+
+    const uniformBuffer = device.createBuffer({
+        size: 4*4*4,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const pipeline = device.createRenderPipeline({
+        label: "axis pipeline",
+        layout: "auto",
+        vertex: { module, entryPoint: "vs_main" },
+        fragment: { module, entryPoint: "fs_main", targets: [{ format: preferredFormat }] },
+        primitive: { topology: "line-list" },
+        depthStencil: {
+            format: "depth24plus",
+            depthWriteEnabled: true,
+            depthCompare: "less",
+        },
+    });
+
+    const bindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(id_group),
+        entries:[
+            { binding: 0, resource: {buffer: uniformBuffer} },
+        ],
+    });
+
+    function render(renderPass, MVP) {
+
+        // 렌더링
+        renderPass.setPipeline(pipeline);
+        renderPass.setBindGroup(0, bindGroup);
+        renderPass.setVertexBuffer(0, axisBuffer);
+        
+        device.queue.writeBuffer(uniformBuffer, 0, MVP);
+
+        // X축
+        renderPass.draw(2, 1, 0, 0);
+        // Y축
+        renderPass.draw(2, 1, 2, 0);
+        // Z축
+        renderPass.draw(2, 1, 4, 0);
+    }
+
+    return { render };
 }
 
 async function load_gltf(url, device, preferredFormat) {
