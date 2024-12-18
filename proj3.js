@@ -13,7 +13,7 @@ const format_depth_texture = 'depth24plus';
 
 
 async function main() {
-    
+
     //초기 설정
     const adapter = await navigator.gpu?.requestAdapter();
     const device = await adapter?.requestDevice();
@@ -31,45 +31,47 @@ async function main() {
 
     let canvasTexture = context.getCurrentTexture();
 
+    // UI 설정 (EventHandler 역할)
     class UI {
-        static NONE = 0;
-        static ROTATING = 1;
-        static TRANSLATING = 2;
-        static mouseMove = UI.NONE;
-        static camera = {fovy:60, position:vec3.create(0,0,-3), near:0.1, far:100};
-        static matrices = {
+        static NONE = 0; //none
+        static ROTATING = 1; //회전
+        static TRANSLATING = 2; //이동
+        static mouseMove = UI.NONE; //현재 마우스 상태
+        static camera = {fovy:60, position:vec3.create(0,0,-3), near:0.1, far:100}; //시야각, 위치, 클리핑 평면
+        static matrices = { //P(원근 투영 행렬),R(회전) 행렬
             P: mat4.perspective(utils.degToRad(UI.camera.fovy), canvasTexture.width/canvasTexture.height, UI.camera.near, UI.camera.far),
             R: mat4.identity(),
         };
         static onmousedown(ev) {
-            if(ev.buttons & 1)  { UI.mouseMove = UI.ROTATING; }
-            else if(ev.buttons & 4) { UI.mouseMove = UI.TRANSLATING ; }
+            if(ev.buttons & 1)  { UI.mouseMove = UI.ROTATING; } //마우스 눌렀을 때 회전 모드(왼쪽)
+            else if(ev.buttons & 4) { UI.mouseMove = UI.TRANSLATING ; } //마우스 눌렀을 때 이동 모드(오른쪽)
         };
         static onmouseup(ev) {
-            UI.mouseMove = UI.NONE;
+            UI.mouseMove = UI.NONE; //떼면 아무 상태도 아닌거로 돌아옴
         };
-        static onmousemove(ev) {
+        static onmousemove(ev) { //마우스를 움직일 때
             let offset = [ev.movementX, ev.movementY];
             if (UI.mouseMove == UI.ROTATING) {
-                UI.update_VP();
+                UI.update_VP(); //VP 업데이트 하고
                 let axis = unproject_vector([offset[1], offset[0], 0], UI.matrices.VP,
-                    [0, 0, canvas.clientWidth, canvas.clientHeight]);
-                UI.matrices.R = mat4.rotate(UI.matrices.R, [axis[0], axis[1], axis[2]], utils.degToRad(vec2.lenSq(offset)*0.1)); 
+                    [0, 0, canvas.clientWidth, canvas.clientHeight]); //마우스 이동 방향에 따른 회전 축 계산
+                UI.matrices.R = mat4.rotate(UI.matrices.R, [axis[0], axis[1], axis[2]], utils.degToRad(vec2.lenSq(offset)*0.1));  //회전 행렬 업데이트
             }
             else if(UI.mouseMove == UI.TRANSLATING) {
                 UI.update_VP();
                 let by = unproject_vector([offset[0], -offset[1], 0], UI.matrices.VP,
-                    [0, 0, canvas.clientWidth, canvas.clientHeight]);
+                    [0, 0, canvas.clientWidth, canvas.clientHeight]); //새로운 위치벡터
                 UI.camera.position = vec3.add(UI.camera.position, vec3.transformMat4(vec3.create(by[0], by[1], by[2]), UI.matrices.R));
+                //카메라 위치에 위치 벡터 더함
             }
         };
         static onwheel(ev) {
             ev.preventDefault();
-            UI.camera.position[2] = -Math.max(1, Math.min(-UI.camera.position[2] + ev.deltaY*0.01, 50));
+            UI.camera.position[2] = -Math.max(1, Math.min(-UI.camera.position[2] + ev.deltaY*0.01, 50)); //카메라의 Z값 위치 변경
             UI.update_VP();
         };
         static update_VP() {
-            UI.matrices.VP = mat4.multiply(mat4.translate(UI.matrices.P, UI.camera.position),UI.matrices.R);
+            UI.matrices.VP = mat4.multiply(mat4.translate(UI.matrices.P, UI.camera.position),UI.matrices.R); //VP 행렬 업데이트
         }
     };
 
@@ -80,35 +82,36 @@ async function main() {
     canvas.onmousemove = UI.onmousemove;
     window.addEventListener("wheel", UI.onwheel, {passive:false});
 
-    
+
+    //탱크 로드
     const tank = await load_gltf("/resource/tank.glb",device, preferredFormat);
     console.log(tank)
 
-    const depthTexture = device.createTexture({
+    //텍스처 생성
+    const depthTexture = device.createTexture({ //텍스처의 깊이 설정
         size: [canvasTexture.width, canvasTexture.height],
         format: format_depth_texture,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
 
-    let M = mat4.identity();
+    let M = mat4.identity(); //단위행렬 
 
     let MVP;
 
     function render(time) {
         
-
-        canvasTexture = context.getCurrentTexture();
+        canvasTexture = context.getCurrentTexture(); //그려질 이미지 cansvas
             
         const encoder = device.createCommandEncoder();
         const renderPass = encoder.beginRenderPass({
-            colorAttachments: [{
+            colorAttachments: [{  //초기 색깔 설정
                 view: canvasTexture.createView(),
                 loadOp: "clear",
                 clearValue: {r:.3, g:.3, b:.3, a:1},
                 storeOp: "store",
             }],
-            depthStencilAttachment: {
+            depthStencilAttachment: { //초기 깊이 설정
                 view: depthTexture.createView(),
                 depthClearValue: 1.0,
                 depthLoadOp: 'clear',
@@ -116,8 +119,8 @@ async function main() {
             },
         });
 
-        MVP = mat4.multiply(UI.matrices.VP, M);
-        tank.render(renderPass, MVP);
+        MVP = mat4.multiply(UI.matrices.VP, M); // M : 모델 행렬 , V : View(카메라), P : Projection(3D -> 2D)
+        tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
         renderPass.end();
         const commandBuffer = encoder.finish();
         device.queue.submit([commandBuffer]);
