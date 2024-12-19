@@ -41,6 +41,7 @@ async function main() {
         static matrices = { //P(원근 투영 행렬),R(회전) 행렬
             P: mat4.perspective(utils.degToRad(UI.camera.fovy), canvasTexture.width/canvasTexture.height, UI.camera.near, UI.camera.far),
             R: mat4.identity(),
+            M: mat4.identity(),  // 탱크의 모델 행렬
         };
         static onmousedown(ev) {
             if(ev.buttons & 1)  { UI.mouseMove = UI.ROTATING; } //마우스 눌렀을 때 회전 모드(왼쪽)
@@ -70,6 +71,33 @@ async function main() {
             UI.camera.position[2] = -Math.max(1, Math.min(-UI.camera.position[2] + ev.deltaY*0.01, 50)); //카메라의 Z값 위치 변경
             UI.update_VP();
         };
+        static onkeydown(ev) {
+            const moveStep = 0.1; // 이동 거리
+            const rotateStep = Math.PI / 36; // 회전 각도 (5도)
+        
+            switch (ev.key) {
+                case "ArrowUp": // 전진
+                    // 탱크가 바라보는 방향으로 전진
+                    tankState.position[0] += moveStep * Math.cos(tankState.rotation);
+                    tankState.position[2] += moveStep * Math.sin(-tankState.rotation);
+                    break;
+                case "ArrowDown": // 후진
+                    // 탱크가 바라보는 방향 반대쪽으로 후진
+                    tankState.position[0] -= moveStep * Math.cos(tankState.rotation);
+                    tankState.position[2] -= moveStep * Math.sin(-tankState.rotation);
+                    break;
+                case "ArrowLeft": // 좌회전
+                    // 회전
+                    tankState.rotation += rotateStep;
+                    break;
+                case "ArrowRight": // 우회전
+                    // 회전
+                    tankState.rotation -= rotateStep;
+                    break;
+            }
+            updateModelMatrix();
+        }
+
         static update_VP() {
             UI.matrices.VP = mat4.multiply(mat4.translate(UI.matrices.P, UI.camera.position),UI.matrices.R); //VP 행렬 업데이트
         }
@@ -77,11 +105,36 @@ async function main() {
 
     UI.update_VP();
 
+    const tankState = {
+        position: vec3.create(0,0,0),  // 초기 위치 (x, y, z)
+        rotation: 0,  // 초기 회전 (라디안 단위)
+    };
+
     canvas.onmousedown = UI.onmousedown;
     canvas.onmouseup = UI.onmouseup;
     canvas.onmousemove = UI.onmousemove;
     window.addEventListener("wheel", UI.onwheel, {passive:false});
+    window.addEventListener("keydown", UI.onkeydown, {passive:false});
 
+    function updateModelMatrix() {
+        // 단위 행렬 생성
+        let modelMatrix = mat4.identity(); // 단위 행렬
+    
+        console.log("Initial Identity Matrix:", modelMatrix);  // 단위 행렬 확인
+
+        const tankStateRotation = tankState.rotation;
+    
+        // 위치 변환
+        modelMatrix = mat4.translate(modelMatrix, tankState.position);  // 위치 변환 (modelMatrix에 직접 적용)
+        console.log("After Translation:", modelMatrix);  // 위치 변환 후 행렬 확인
+    
+        // Y축 회전
+        modelMatrix = mat4.rotateY(modelMatrix, tankStateRotation);  // 회전 (modelMatrix에 직접 적용)
+        console.log("After Rotation:", modelMatrix);  // 회전 후 행렬 확인
+    
+        // 최종 모델 행렬을 UI.matrices.M에 저장
+        UI.matrices.M = modelMatrix;
+    }
 
     //탱크 로드
     const tank = await load_gltf("/resource/tank.glb",device, preferredFormat);
@@ -100,9 +153,6 @@ async function main() {
         format: format_depth_texture,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
-
-
-    let M = mat4.identity(); //단위행렬 
 
     let MVP;
 
@@ -126,10 +176,10 @@ async function main() {
             },
         });
 
-        MVP = mat4.multiply(UI.matrices.VP, M); // M : 모델 행렬 , V : View(카메라), P : Projection(3D -> 2D)
+        MVP = mat4.multiply(UI.matrices.VP, UI.matrices.M); // M : 모델 행렬 , V : View(카메라), P : Projection(3D -> 2D)
         tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
-        grid.render(renderPass, MVP)
-        worldAxis.render(renderPass,MVP)
+        grid.render(renderPass, UI.matrices.VP)
+        worldAxis.render(renderPass,UI.matrices.VP)
         renderPass.end();
         const commandBuffer = encoder.finish();
         device.queue.submit([commandBuffer]);
