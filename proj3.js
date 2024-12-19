@@ -447,154 +447,143 @@ async function load_gltf(url, device, preferredFormat) {
     });
 
         // Mesh 객체 탐색
-    const meshes = [];
-    root.scene.traverse((child) => {
-        if (child.isMesh) {
-            meshes.push(child);
-        }
-    });
-
-    if (meshes.length === 0) {
-        throw new Error("No Mesh objects found in the GLTF model.");
-    }
-
-    // 첫 번째 메쉬 객체를 선택
-    const obj = meshes[0];
-    console.log("Mesh object found:", obj);
-
-    if (!obj.geometry || !obj.geometry.attributes) {
-        throw new Error("Mesh does not contain geometry attributes.");
-    }
+        const meshes = [];
+        root.scene.traverse((child) => {
+            if (child.isMesh) {
+                meshes.push(child);
+            }
+        });
         
-    const positions = obj.geometry.attributes.position.array;
-    const normals = obj.geometry.attributes.normal.array;
-    const indices = new Uint32Array(obj.geometry.index.array);
-
-    const vertexBuffer = {};
-
-    vertexBuffer.position = device.createBuffer({
-        label:"obj mesh positions",
-        size: positions.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-
+        if (meshes.length === 0) {
+            throw new Error("No Mesh objects found in the GLTF model.");
+        }
         
-    device.queue.writeBuffer(vertexBuffer.position, 0, positions);
-
-    vertexBuffer.normal = device.createBuffer({
-        label:"obj mesh normals",
-        size: normals.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-
-    device.queue.writeBuffer(vertexBuffer.normal, 0, normals);
-
-    const indexBuffer = device.createBuffer({
-        label:"obj mesh indices",
-        size: indices.byteLength,
-        usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
-    });
-
-    device.queue.writeBuffer(indexBuffer, 0, indices);
-
-    const uniformBuffer = device.createBuffer({
-        size: 4*4*4,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    const src_shaders = `
-        struct VertexOut {
-            @builtin(position) position: vec4f,
-            @location(${loc_inter_stage_normal}) normal: vec3f
-        };
-
-        struct Matrices {
-            MVP: mat4x4f,
-        };
-
-        @group(${id_group}) @binding(${binding_matrices}) var<uniform> matrices:Matrices;
-
-        @vertex fn main_vert(
-            @location(${loc_position}) position: vec3f,
-            @location(${loc_normal}) normal: vec3f)
-            -> VertexOut {
-            var vertex: VertexOut;
-            vertex.position = matrices.MVP * vec4f(position, 1);
-            vertex.normal = normal;
-            return vertex;
-        }
-        @fragment fn main_frag(@location(${loc_inter_stage_normal}) normal: vec3f)
-            -> @location(0) vec4f {
-            return vec4f(0.5*(normal + vec3f(1)), 1);
-        }
-    `;
-    const shaderModule = device.createShaderModule({
-        label: "solid triangle shader",
-        code:src_shaders,
-    });
-
-    const pipeline = device.createRenderPipeline({
-        label: "solid triangle pipeline",
-        layout: "auto",
-        vertex: {
-            module:shaderModule,
-            entryPoint: "main_vert",
-            buffers: [
-                        {
-                            arrayStride: 4*3,
-                            attributes: [{
-                                format: "float32x3",
-                                offset: 0,
-                                shaderLocation: loc_position,
-                            }],
-                        },
-                        {
-                            arrayStride: 4*3,
-                            attributes: [{
-                                format: "float32x3",
-                                offset: 0,
-                                shaderLocation: loc_normal,
-                            }],
-                        }
-
+        console.log("Mesh objects found:", meshes);
+        
+        const vertexBuffers = [];
+        const indexBuffers = [];
+        const uniformBuffer = device.createBuffer({
+            size: 4 * 4 * 4,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        
+        // 각 메쉬에 대해 버퍼 생성
+        meshes.forEach((obj, index) => {
+            if (!obj.geometry || !obj.geometry.attributes) {
+                throw new Error("Mesh does not contain geometry attributes.");
+            }
+        
+            const positions = obj.geometry.attributes.position.array;
+            const normals = obj.geometry.attributes.normal.array;
+            const indices = new Uint32Array(obj.geometry.index.array);
+        
+            const vertexBuffer = {
+                position: device.createBuffer({
+                    label: `obj${index} mesh positions`,
+                    size: positions.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+                }),
+                normal: device.createBuffer({
+                    label: `obj${index} mesh normals`,
+                    size: normals.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+                }),
+            };
+        
+            device.queue.writeBuffer(vertexBuffer.position, 0, positions);
+            device.queue.writeBuffer(vertexBuffer.normal, 0, normals);
+        
+            const indexBuffer = device.createBuffer({
+                label: `obj${index} mesh indices`,
+                size: indices.byteLength,
+                usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+            });
+        
+            device.queue.writeBuffer(indexBuffer, 0, indices);
+        
+            vertexBuffers.push(vertexBuffer);
+            indexBuffers.push(indexBuffer);
+        });
+        
+        const shaderModule = device.createShaderModule({
+            label: "solid triangle shader",
+            code: `
+                struct VertexOut {
+                    @builtin(position) position: vec4f,
+                    @location(0) normal: vec3f
+                };
+        
+                struct Matrices {
+                    MVP: mat4x4f,
+                };
+        
+                @group(0) @binding(0) var<uniform> matrices: Matrices;
+        
+                @vertex fn main_vert(@location(0) position: vec3f, @location(1) normal: vec3f) -> VertexOut {
+                    var vertex: VertexOut;
+                    vertex.position = matrices.MVP * vec4f(position, 1.0);
+                    vertex.normal = normal;
+                    return vertex;
+                }
+        
+                @fragment fn main_frag(@location(0) normal: vec3f) -> @location(0) vec4f {
+                    return vec4f(0.5 * (normal + vec3f(1.0)), 1.0);
+                }
+            `,
+        });
+        
+        const pipeline = device.createRenderPipeline({
+            label: "solid triangle pipeline",
+            layout: "auto",
+            vertex: {
+                module: shaderModule,
+                entryPoint: "main_vert",
+                buffers: [
+                    {
+                        arrayStride: 4 * 3,
+                        attributes: [{ format: "float32x3", offset: 0, shaderLocation: 0 }],
+                    },
+                    {
+                        arrayStride: 4 * 3,
+                        attributes: [{ format: "float32x3", offset: 0, shaderLocation: 1 }],
+                    },
                 ],
-        },
-        fragment: {
-            module:shaderModule,
-            entryPoint: "main_frag",
-            targets: [{
-                format: preferredFormat
-            }]
-        },
-        primitive:{
-            topology: 'triangle-list',
-        },
-        depthStencil: {
-            depthWriteEnabled: true,
-            depthCompare: 'less',
-            format: format_depth_texture,
-        },
-    });
-
-    const bindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(id_group),
-        entries:[
-            { binding: binding_matrices, resource: {buffer: uniformBuffer} },
-        ],
-    });
-
-    function render(renderPass, MVP) {
-        renderPass.setPipeline(pipeline);
-        device.queue.writeBuffer(uniformBuffer, 0, MVP);
-        renderPass.setVertexBuffer(0, vertexBuffer.position);
-        renderPass.setVertexBuffer(1, vertexBuffer.normal);
-        renderPass.setIndexBuffer(indexBuffer, 'uint32');
-        renderPass.setBindGroup(id_group, bindGroup);
-        renderPass.drawIndexed(obj.geometry.index.count);
-    }
-
-    return {render};
-}
+            },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "main_frag",
+                targets: [{ format: preferredFormat }],
+            },
+            primitive: { topology: 'triangle-list' },
+            depthStencil: {
+                depthWriteEnabled: true,
+                depthCompare: 'less',
+                format: format_depth_texture,
+            },
+        });
+        
+        const bindGroup = device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+            ],
+        });
+        
+        function render(renderPass, MVP) {
+            // 각 메쉬에 대해 렌더링을 반복
+            meshes.forEach((obj, index) => {
+                renderPass.setPipeline(pipeline);
+                device.queue.writeBuffer(uniformBuffer, 0, MVP);
+                renderPass.setVertexBuffer(0, vertexBuffers[index].position);
+                renderPass.setVertexBuffer(1, vertexBuffers[index].normal);
+                renderPass.setIndexBuffer(indexBuffers[index], 'uint32');
+                renderPass.setBindGroup(0, bindGroup);
+                renderPass.drawIndexed(obj.geometry.index.count);
+            });
+        }
+        
+        return { render };
+    }        
 
 // https://github.com/g-truc/glm/blob/master/glm/ext/matrix_projection.inl
 function project(p_obj, MVP, viewport)
