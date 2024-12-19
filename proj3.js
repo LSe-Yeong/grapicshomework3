@@ -248,14 +248,27 @@ function load_grid(device, preferredFormat) {
 
 function load_worldAxis(device, preferredFormat) {
     // 월드 축의 길이를 설정
-    const axisLength = 5;
+    const axisLength = 10;
+    const adjustY = -0.4;
     const axisVertices = [
         // X축 (빨간색)
-        0, 0, 0, axisLength, 0, 0,
+        -axisLength, adjustY, 0, axisLength, adjustY, 0,
         // Y축 (초록색)
-        0, 0, 0, 0, axisLength, 0,
+        0, -axisLength+adjustY, 0, 0, axisLength+adjustY, 0,
         // Z축 (파란색)
-        0, 0, 0, 0, 0, axisLength
+        0, adjustY, -axisLength, 0, adjustY, axisLength
+    ];
+
+    const axisColors = [
+        // X축 (빨간색)
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        // Y축 (초록색)
+        0.0, 1.0, 0.0,
+        0.0, 1.0, 0.0,
+        // Z축 (파란색)
+        0.0, 0.0, 1.0,
+        0.0, 0.0, 1.0
     ];
 
     const axisBuffer = device.createBuffer({
@@ -268,34 +281,38 @@ function load_worldAxis(device, preferredFormat) {
     new Float32Array(axisBuffer.getMappedRange()).set(axisVertices);
     axisBuffer.unmap();
 
+    const colorBuffer = device.createBuffer({
+        label: "axis colors",
+        size: axisColors.length * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.VERTEX,
+        mappedAtCreation: true,
+    });
+    
+    new Float32Array(colorBuffer.getMappedRange()).set(axisColors);
+    colorBuffer.unmap();
+
     const module = device.createShaderModule({
         code: `
             @group(0) @binding(0) var<uniform> MVP: mat4x4<f32>;
 
+            struct VertexOutput {
+                @builtin(position) position: vec4f,
+                @location(2) color: vec3f,
+            };
+
             @vertex
-            fn vs_main(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4f {
-                // 고정 크기 배열을 사용하여 위치 지정
-                var positions: array<vec3f, 6>;
-
-                positions[0] = vec3f(0.0, 0.0, 0.0);  // X축 시작점
-                positions[1] = vec3f(1.0, 0.0, 0.0);  // X축 끝점
-
-                positions[2] = vec3f(0.0, 0.0, 0.0);  // Y축 시작점
-                positions[3] = vec3f(0.0, 1.0, 0.0);  // Y축 끝점
-
-                positions[4] = vec3f(0.0, 0.0, 0.0);  // Z축 시작점
-                positions[5] = vec3f(0.0, 0.0, 1.0);  // Z축 끝점
-
-                // MVP 행렬을 사용하여 변환된 위치 반환
-                let transformedPosition = MVP * vec4f(positions[vertexIndex], 1.0);
-                
-                // 변환된 위치를 반환하여 위치 정보를 GPU에 전달
-                return transformedPosition;
+            fn vs_main(@location(0) position: vec3f, @location(1) color: vec3f) -> VertexOutput {
+                var output: VertexOutput;
+                // MVP 행렬을 사용해 정점을 변환
+                output.position = MVP * vec4f(position, 1.0);
+                output.color = color; // 색상 값을 전달
+                return output;
             }
 
             @fragment
-            fn fs_main() -> @location(0) vec4f {
-                return vec4f(1.0,0.0,0.0,1.0); // Grid 색상
+            fn fs_main(@location(2) color: vec3f) -> @location(0) vec4f {
+                // 색상 값을 받아서 반환
+                return vec4f(color, 1.0);
             }
         `,
     });
@@ -309,8 +326,37 @@ function load_worldAxis(device, preferredFormat) {
     const pipeline = device.createRenderPipeline({
         label: "axis pipeline",
         layout: "auto",
-        vertex: { module, entryPoint: "vs_main" },
-        fragment: { module, entryPoint: "fs_main", targets: [{ format: preferredFormat }] },
+        vertex: {
+            module,
+            entryPoint: "vs_main",
+            buffers: [
+                {
+                    arrayStride: 3 * Float32Array.BYTES_PER_ELEMENT, // 각 정점의 크기 (vec3)
+                    attributes: [
+                        {
+                            shaderLocation: 0, // 셰이더에서 @location(0)으로 참조
+                            offset: 0, // 시작 위치
+                            format: "float32x3", // vec3f 포맷
+                        },
+                    ],
+                },
+                {
+                    arrayStride: 3 * Float32Array.BYTES_PER_ELEMENT, // 색상 크기 (vec3)
+                    attributes: [
+                        {
+                            shaderLocation: 1, // 색상 정보
+                            offset: 0,
+                            format: "float32x3",
+                        },
+                    ],
+                },
+            ],
+        },
+        fragment: { 
+            module, 
+            entryPoint: "fs_main", 
+            targets: [{ format: preferredFormat }] 
+        },
         primitive: { topology: "line-list" },
         depthStencil: {
             format: "depth24plus",
@@ -327,20 +373,14 @@ function load_worldAxis(device, preferredFormat) {
     });
 
     function render(renderPass, MVP) {
-
         // 렌더링
         renderPass.setPipeline(pipeline);
         renderPass.setBindGroup(0, bindGroup);
         renderPass.setVertexBuffer(0, axisBuffer);
-        
+        renderPass.setVertexBuffer(1, colorBuffer); // 색상 버퍼
         device.queue.writeBuffer(uniformBuffer, 0, MVP);
 
-        // X축
-        renderPass.draw(2, 1, 0, 0);
-        // Y축
-        renderPass.draw(2, 1, 2, 0);
-        // Z축
-        renderPass.draw(2, 1, 4, 0);
+        renderPass.draw(6, 1, 0, 0); // 정점 6개
     }
 
     return { render };
