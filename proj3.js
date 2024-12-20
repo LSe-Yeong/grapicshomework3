@@ -11,6 +11,16 @@ const binding_matrices = 7;
 
 const format_depth_texture = 'depth24plus';
 
+const tankState = {
+    position: vec3.create(0,0,0),  // 초기 위치 (x, y, z)
+    rotation: 0,  // 초기 회전 (라디안 단위)
+};
+const turretState = {
+    rotation : vec3.create(0,0,0)
+}
+const gunState = {
+    rotation : vec3.create(0,0,0)
+}
 
 async function main() {
 
@@ -89,12 +99,36 @@ async function main() {
                 case "ArrowLeft": // 좌회전
                     // 회전
                     tankState.rotation += rotateStep;
+                    // turretState.rotation += rotateStep;
+                    // gunState.rotation += rotateStep;
                     break;
                 case "ArrowRight": // 우회전
                     // 회전
                     tankState.rotation -= rotateStep;
+                    // turretState.rotation -= rotateStep;
+                    // gunState.rotation -= rotateStep;
+                    console.log(turretState)
+                    console.log(tankState)
                     break;
+                case "a":
+                    turretState.rotation[1] += rotateStep
+                    gunState.rotation[1] += rotateStep
+                    break;
+                case "d":
+                    turretState.rotation[1] -= rotateStep
+                    gunState.rotation[1] -= rotateStep
+                    break;
+                case "w":
+                    gunState.rotation[2] += rotateStep
+                    break;
+                case "s":
+                    gunState.rotation[2] -= rotateStep
+                    break;
+
             }
+            console.log(tankState)
+            console.log(turretState)
+            console.log(gunState)
             updateModelMatrix();
         }
 
@@ -104,17 +138,6 @@ async function main() {
     };
 
     UI.update_VP();
-
-    const tankState = {
-        position: vec3.create(0,0,0),  // 초기 위치 (x, y, z)
-        rotation: 0,  // 초기 회전 (라디안 단위)
-    };
-    const turretState = {
-        rotation : vec3.create(0,0,0)
-    }
-    const gunState = {
-        rotation : vec3.create(0,0,0)
-    }
 
     canvas.onmousedown = UI.onmousedown;
     canvas.onmouseup = UI.onmouseup;
@@ -155,7 +178,9 @@ async function main() {
     const grid = load_grid(device,preferredFormat)
 
     //world axis 로드
-    const worldAxis = load_worldAxis(device,preferredFormat)
+    const worldAxis = load_worldAxis(device,preferredFormat,10,0.5)
+    const tankWorldAxis = load_worldAxis(device,preferredFormat,2,1.0)
+
     console.log(worldAxis)
 
     //텍스처 생성
@@ -188,11 +213,16 @@ async function main() {
         });
 
         MVP = mat4.multiply(UI.matrices.VP, UI.matrices.M); // M : 모델 행렬 , V : View(카메라), P : Projection(3D -> 2D)
-        tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
-        turret.render(renderPass,MVP);
-        gun.render(renderPass,MVP);
+        // tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
+        // turret.render(renderPass,MVP);
+        // gun.render(renderPass,MVP);
+
+        const tankParts=[tank,turret,gun]
+        tankPartRender(tankParts,renderPass,MVP)
+
         grid.render(renderPass, UI.matrices.VP)
         worldAxis.render(renderPass,UI.matrices.VP)
+        tankWorldAxis.render(renderPass,MVP)
         renderPass.end();
         const commandBuffer = encoder.finish();
         device.queue.submit([commandBuffer]);
@@ -202,6 +232,29 @@ async function main() {
 
     requestAnimationFrame(render);
 
+}
+
+function tankPartRender(tankParts,renderPass,MVP){
+    const tank = tankParts[0]
+    const turret = tankParts[1]
+    const gun = tankParts[2]
+
+    const center = [tankState.position[0],tankState.position[1],tankState.position[2]]
+
+    tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
+    let newMVP1 = mat4.clone(MVP)
+    newMVP1 = mat4.translate(newMVP1,[-0.5,0,0])
+    newMVP1 = mat4.rotateY(newMVP1, turretState.rotation[1]);
+    newMVP1 = mat4.translate(newMVP1, [0.5,0,0]);
+    turret.render(renderPass,newMVP1);
+
+    let newMVP2 = mat4.clone(newMVP1)
+    newMVP2 = mat4.translate(newMVP2,[-0.18,0.25,0])
+    newMVP2 = mat4.rotateZ(newMVP2,gunState.rotation[2])
+    newMVP2 = mat4.translate(newMVP2,[0.18,-0.25,0])
+    gun.render(renderPass,newMVP2);
+
+    return 
 }
 
 function load_grid(device, preferredFormat) {
@@ -309,9 +362,9 @@ function load_grid(device, preferredFormat) {
     return { render };
 }
 
-function load_worldAxis(device, preferredFormat) {
+function load_worldAxis(device, preferredFormat,length,colorValue) {
     // 월드 축의 길이를 설정
-    const axisLength = 10;
+    const axisLength = length;
     const adjustY = -0.4;
     const axisVertices = [
         // X축 (빨간색)
@@ -324,14 +377,14 @@ function load_worldAxis(device, preferredFormat) {
 
     const axisColors = [
         // X축 (빨간색)
-        1.0, 0.0, 0.0,
-        1.0, 0.0, 0.0,
+        colorValue, 0.0, 0.0,
+        colorValue, 0.0, 0.0,
         // Y축 (초록색)
-        0.0, 1.0, 0.0,
-        0.0, 1.0, 0.0,
+        0.0, colorValue, 0.0,
+        0.0, colorValue, 0.0,
         // Z축 (파란색)
-        0.0, 0.0, 1.0,
-        0.0, 0.0, 1.0
+        0.0, 0.0, colorValue,
+        0.0, 0.0, colorValue
     ];
 
     const axisBuffer = device.createBuffer({
