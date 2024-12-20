@@ -502,8 +502,32 @@ function load_worldAxis(device, preferredFormat,length,colorValue) {
     return { render };
 }
 
+
+async function loadTexture(device, url) {
+    const image = new Image();
+    image.src = url;
+    
+    await new Promise((resolve) => image.onload = resolve);
+
+    const texture = device.createTexture({
+        size: { width: image.width, height: image.height, depthOrArrayLayers: 1 },
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.SAMPLED | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT, // TEXTURE_BINDING 추가
+    });
+
+    device.queue.copyExternalImageToTexture(
+        { source: image },
+        { texture: texture },
+        [image.width, image.height]
+    );
+
+    return texture;
+}
+
 async function load_gltf(url, device, preferredFormat,meshIdx) {
     const loader = new GLTFLoader();
+    const texture = await loadTexture(device, "/resource/tank-color.jpg")
+    console.log(texture)
 
     const root = await new Promise((resolve,reject) => {
         loader.load(url,
@@ -542,7 +566,10 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
         const positions = obj.geometry.attributes.position.array;
         const normals = obj.geometry.attributes.normal.array;
         const indices = new Uint32Array(obj.geometry.index.array);
+        const texCoords = obj.geometry.attributes.uv ? obj.geometry.attributes.uv.array : [];
     
+        console.log(texCoords)
+        
         const vertexBuffer = {
             position: device.createBuffer({
                 label: `obj${meshIdx} mesh positions`,
@@ -554,10 +581,17 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
                 size: normals.byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
             }),
+            texCoord: device.createBuffer({
+                label: `obj${meshIdx} mesh texCoords`,
+                size: texCoords.byteLength,
+                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            }),
         };
     
         device.queue.writeBuffer(vertexBuffer.position, 0, positions);
         device.queue.writeBuffer(vertexBuffer.normal, 0, normals);
+        device.queue.writeBuffer(vertexBuffer.texCoord, 0, texCoords);
+
     
         const indexBuffer = device.createBuffer({
             label: `obj${meshIdx} mesh indices`,
@@ -575,7 +609,8 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
             code: `
                 struct VertexOut {
                     @builtin(position) position: vec4f,
-                    @location(0) normal: vec3f
+                    @location(0) normal: vec3f,
+                    @location(1) texCoord: vec2f,
                 };
         
                 struct Matrices {
@@ -583,16 +618,21 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
                 };
         
                 @group(0) @binding(0) var<uniform> matrices: Matrices;
+                @group(0) @binding(1) var myTexture: texture_2d<f32>;
+                @group(0) @binding(2) var mySampler: sampler;
+
         
-                @vertex fn main_vert(@location(0) position: vec3f, @location(1) normal: vec3f) -> VertexOut {
+                @vertex fn main_vert(@location(0) position: vec3f, @location(1) normal: vec3f, @location(2) texCoord: vec2f) -> VertexOut {
                     var vertex: VertexOut;
                     vertex.position = matrices.MVP * vec4f(position, 1.0);
                     vertex.normal = normal;
+                    vertex.texCoord = texCoord;
                     return vertex;
                 }
         
-                @fragment fn main_frag(@location(0) normal: vec3f) -> @location(0) vec4f {
-                    return vec4f(0.5 * (normal + vec3f(1.0)), 1.0);
+                @fragment fn main_frag(@location(0) normal: vec3f, @location(1) texCoord: vec2f) -> @location(0) vec4f {
+                    var color = textureSample(myTexture, mySampler, texCoord);
+                    return color;
                 }
             `,
         });
@@ -612,6 +652,10 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
                         arrayStride: 4 * 3,
                         attributes: [{ format: "float32x3", offset: 0, shaderLocation: 1 }],
                     },
+                    {
+                        arrayStride: 4 * 2,
+                        attributes: [{ format: "float32x2", offset: 0, shaderLocation: 2 }],
+                    },
                 ],
             },
             fragment: {
@@ -627,10 +671,22 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
             },
         });
         
+        const sampler = device.createSampler({
+            minFilter: 'linear', // 텍스처 크기가 다를 경우 보간 방식 설정
+            magFilter: 'linear',
+            addressModeU: 'repeat', // 텍스처 좌표가 0~1 범위를 벗어나면 반복하도록 설정
+            addressModeV: 'repeat',
+        });
+
         const bindGroup = device.createBindGroup({
             layout: pipeline.getBindGroupLayout(0),
             entries: [
-                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 0, resource: { buffer: uniformBuffer }},
+                { binding: 1, resource: texture.createView({
+                    dimension: "2d",  // 2D 텍스처 뷰로 설정
+                    format: "rgba8unorm",  // 텍스처 포맷
+                }) }, // 텍스처 뷰
+                { binding: 2, resource: sampler }, // 샘플러
             ],
         });
         
@@ -641,6 +697,7 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
                 device.queue.writeBuffer(uniformBuffer, 0, MVP);
                 renderPass.setVertexBuffer(0, vertexBuffer.position);
                 renderPass.setVertexBuffer(1, vertexBuffer.normal);
+                renderPass.setVertexBuffer(2, vertexBuffer.texCoord);  // texCoord 버퍼 추가
                 renderPass.setIndexBuffer(indexBuffer, 'uint32');
                 renderPass.setBindGroup(0, bindGroup);
                 renderPass.drawIndexed(meshes[meshIdx].geometry.index.count);
