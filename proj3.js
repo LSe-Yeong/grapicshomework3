@@ -109,6 +109,12 @@ async function main() {
         position: vec3.create(0,0,0),  // 초기 위치 (x, y, z)
         rotation: 0,  // 초기 회전 (라디안 단위)
     };
+    const turretState = {
+        rotation : vec3.create(0,0,0)
+    }
+    const gunState = {
+        rotation : vec3.create(0,0,0)
+    }
 
     canvas.onmousedown = UI.onmousedown;
     canvas.onmouseup = UI.onmouseup;
@@ -137,8 +143,13 @@ async function main() {
     }
 
     //탱크 로드
-    const tank = await load_gltf("/resource/tank.glb",device, preferredFormat);
+    const tank = await load_gltf("/resource/tank.glb",device, preferredFormat,0);
     console.log(tank)
+
+    //포탑, 건 로드
+    const turret = await load_gltf("/resource/tank.glb",device, preferredFormat,2)
+    
+    const gun = await load_gltf("/resource/tank.glb",device, preferredFormat,1)
 
     //grid 로드
     const grid = load_grid(device,preferredFormat)
@@ -178,6 +189,8 @@ async function main() {
 
         MVP = mat4.multiply(UI.matrices.VP, UI.matrices.M); // M : 모델 행렬 , V : View(카메라), P : Projection(3D -> 2D)
         tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
+        turret.render(renderPass,MVP);
+        gun.render(renderPass,MVP);
         grid.render(renderPass, UI.matrices.VP)
         worldAxis.render(renderPass,UI.matrices.VP)
         renderPass.end();
@@ -436,7 +449,7 @@ function load_worldAxis(device, preferredFormat) {
     return { render };
 }
 
-async function load_gltf(url, device, preferredFormat) {
+async function load_gltf(url, device, preferredFormat,meshIdx) {
     const loader = new GLTFLoader();
 
     const root = await new Promise((resolve,reject) => {
@@ -460,50 +473,49 @@ async function load_gltf(url, device, preferredFormat) {
         
         console.log("Mesh objects found:", meshes);
         
-        const vertexBuffers = [];
-        const indexBuffers = [];
+        // const vertexBuffers = [];
+        // const indexBuffers = [];
         const uniformBuffer = device.createBuffer({
             size: 4 * 4 * 4,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         
         // 각 메쉬에 대해 버퍼 생성
-        meshes.forEach((obj, index) => {
-            if (!obj.geometry || !obj.geometry.attributes) {
-                throw new Error("Mesh does not contain geometry attributes.");
-            }
-        
-            const positions = obj.geometry.attributes.position.array;
-            const normals = obj.geometry.attributes.normal.array;
-            const indices = new Uint32Array(obj.geometry.index.array);
-        
-            const vertexBuffer = {
-                position: device.createBuffer({
-                    label: `obj${index} mesh positions`,
-                    size: positions.byteLength,
-                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-                }),
-                normal: device.createBuffer({
-                    label: `obj${index} mesh normals`,
-                    size: normals.byteLength,
-                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-                }),
-            };
-        
-            device.queue.writeBuffer(vertexBuffer.position, 0, positions);
-            device.queue.writeBuffer(vertexBuffer.normal, 0, normals);
-        
-            const indexBuffer = device.createBuffer({
-                label: `obj${index} mesh indices`,
-                size: indices.byteLength,
-                usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
-            });
-        
-            device.queue.writeBuffer(indexBuffer, 0, indices);
-        
-            vertexBuffers.push(vertexBuffer);
-            indexBuffers.push(indexBuffer);
+        const obj = meshes[meshIdx]        
+        if (!obj.geometry || !obj.geometry.attributes) {
+            throw new Error("Mesh does not contain geometry attributes.");
+        }
+    
+        const positions = obj.geometry.attributes.position.array;
+        const normals = obj.geometry.attributes.normal.array;
+        const indices = new Uint32Array(obj.geometry.index.array);
+    
+        const vertexBuffer = {
+            position: device.createBuffer({
+                label: `obj${meshIdx} mesh positions`,
+                size: positions.byteLength,
+                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            }),
+            normal: device.createBuffer({
+                label: `obj${meshIdx} mesh normals`,
+                size: normals.byteLength,
+                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            }),
+        };
+    
+        device.queue.writeBuffer(vertexBuffer.position, 0, positions);
+        device.queue.writeBuffer(vertexBuffer.normal, 0, normals);
+    
+        const indexBuffer = device.createBuffer({
+            label: `obj${meshIdx} mesh indices`,
+            size: indices.byteLength,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
         });
+    
+        device.queue.writeBuffer(indexBuffer, 0, indices);
+    
+        // vertexBuffers.push(vertexBuffer);
+        // indexBuffers.push(indexBuffer);
         
         const shaderModule = device.createShaderModule({
             label: "solid triangle shader",
@@ -571,16 +583,15 @@ async function load_gltf(url, device, preferredFormat) {
         
         function render(renderPass, MVP) {
             // 각 메쉬에 대해 렌더링을 반복
-            meshes.forEach((obj, index) => {
+
                 renderPass.setPipeline(pipeline);
                 device.queue.writeBuffer(uniformBuffer, 0, MVP);
-                renderPass.setVertexBuffer(0, vertexBuffers[index].position);
-                renderPass.setVertexBuffer(1, vertexBuffers[index].normal);
-                renderPass.setIndexBuffer(indexBuffers[index], 'uint32');
+                renderPass.setVertexBuffer(0, vertexBuffer.position);
+                renderPass.setVertexBuffer(1, vertexBuffer.normal);
+                renderPass.setIndexBuffer(indexBuffer, 'uint32');
                 renderPass.setBindGroup(0, bindGroup);
-                renderPass.drawIndexed(obj.geometry.index.count);
-            });
-        }
+                renderPass.drawIndexed(meshes[meshIdx].geometry.index.count);
+        };
         
         return { render };
     }        
