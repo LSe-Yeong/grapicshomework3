@@ -22,6 +22,9 @@ const gunState = {
     rotation : vec3.create(0,0,0)
 }
 
+const shells=[]
+const shellStates=[]
+
 async function main() {
 
     //초기 설정
@@ -81,10 +84,10 @@ async function main() {
             UI.camera.position[2] = -Math.max(1, Math.min(-UI.camera.position[2] + ev.deltaY*0.01, 50)); //카메라의 Z값 위치 변경
             UI.update_VP();
         };
-        static onkeydown(ev) {
+        static async onkeydown(ev) {
             const moveStep = 0.1; // 이동 거리
             const rotateStep = Math.PI / 36; // 회전 각도 (5도)
-        
+            console.log(ev.key)
             switch (ev.key) {
                 case "ArrowUp": // 전진
                     // 탱크가 바라보는 방향으로 전진
@@ -124,8 +127,20 @@ async function main() {
                 case "s":
                     gunState.rotation[2] -= rotateStep
                     break;
-
+                case " ":
+                    const shell = await load_gltf("/resource/88mm_shell.glb",device,preferredFormat,0)
+                    shells.push(shell)
+                    shellStates.push({
+                        position: vec3.create(0,0,0),
+                        rotation: 0,
+                        MVP: 0,
+                    })
+                    console.log(shells)
+                    console.log(shellStates)
+                    break;
+                    
             }
+
             console.log(tankState)
             console.log(turretState)
             console.log(gunState)
@@ -169,6 +184,15 @@ async function main() {
     const tank = await load_gltf("/resource/tank.glb",device, preferredFormat,0);
     console.log(tank)
 
+    // for(let i=0;i<2;i++){
+    //     const shell = await load_gltf("/resource/88mm_shell.glb",device,preferredFormat,0)
+    //     shells.push(shell)
+    //     shellStates.push({
+    //         position: vec3.create(0,0,0),
+    //         rotation: 0,
+    //     })
+    // }
+
     //포탑, 건 로드
     const turret = await load_gltf("/resource/tank.glb",device, preferredFormat,2)
     
@@ -191,9 +215,40 @@ async function main() {
     });
 
     let MVP;
+    let shellMVPS = []
+
+    function translateShell(shellState){
+        console.log("detected")
+
+        let shellMVP = mat4.clone(shellState.MVP)
+
+        shellState.position[0]+=3.0
+        shellMVP = mat4.translate(shellState.MVP,shellState.position)
+
+        shellState.MVP = mat4.clone(shellMVP)
+        console.log(shellState.MVP)
+        
+        return 
+    }
+
+    function setFirstMVP(gunState,idx){
+        let shellMVP = mat4.clone(gunState)
+
+        shellMVP = mat4.translate(shellMVP,[0.7,0.43,0])
+        shellMVP = mat4.scale(shellMVP,[0.005,0.005,0.005])
+        shellMVP = mat4.rotateZ(shellMVP,30)
+
+        shellStates[idx].MVP = mat4.clone(shellMVP)
+     
+        return shellMVP
+    }
+
+    let timeCount =0;
 
     function render(time) {
         
+        timeCount+=1
+
         canvasTexture = context.getCurrentTexture(); //그려질 이미지 cansvas
             
         const encoder = device.createCommandEncoder();
@@ -213,12 +268,32 @@ async function main() {
         });
 
         MVP = mat4.multiply(UI.matrices.VP, UI.matrices.M); // M : 모델 행렬 , V : View(카메라), P : Projection(3D -> 2D)
+
         // tank.render(renderPass, MVP); //MVP 정보 탱크 렌더링
         // turret.render(renderPass,MVP);
         // gun.render(renderPass,MVP);
 
         const tankParts=[tank,turret,gun]
-        tankPartRender(tankParts,renderPass,MVP)
+        const nowGunState = tankPartRender(tankParts,renderPass,MVP)
+
+        console.log(shellStates)
+         
+        for(let i=0;i<shellStates.length;i++){
+            let nowShellMVP = shellStates[i].MVP == 0 ? setFirstMVP(nowGunState,i) : shellStates[i].MVP
+            console.log(shells)
+            shells[i].render(renderPass,nowShellMVP)
+        }
+
+        console.log(shellStates)
+
+        if(timeCount % 100 ==0){
+            if(shellStates.length!=0){
+                for(let i=0;i<shellStates.length;i++){
+                    console.log(shellStates[i])
+                    translateShell(shellStates[i])
+                }
+            }
+        }
 
         grid.render(renderPass, UI.matrices.VP)
         worldAxis.render(renderPass,UI.matrices.VP)
@@ -254,7 +329,7 @@ function tankPartRender(tankParts,renderPass,MVP){
     newMVP2 = mat4.translate(newMVP2,[0.18,-0.25,0])
     gun.render(renderPass,newMVP2);
 
-    return 
+    return newMVP2
 }
 
 function load_grid(device, preferredFormat) {
@@ -515,7 +590,7 @@ async function loadTexture(device, url) {
         usage: GPUTextureUsage.SAMPLED | GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT, // TEXTURE_BINDING 추가
     });
 
-    device.queue.copyExternalImageToTexture(
+    device.queue.copyExternalImageToTexture (
         { source: image },
         { texture: texture },
         [image.width, image.height]
@@ -528,7 +603,6 @@ async function load_gltf(url, device, preferredFormat,meshIdx) {
     const loader = new GLTFLoader();
     const texture = await loadTexture(device, "/resource/tank-color.jpg")
     console.log(texture)
-
     const root = await new Promise((resolve,reject) => {
         loader.load(url,
             (model) => {resolve(model);},
